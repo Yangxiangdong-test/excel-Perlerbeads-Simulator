@@ -1,0 +1,1464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 拼豆模拟器 V1.0</title>
+
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        primary: { 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a' }
+      }
+    }
+  }
+}
+</script>
+
+<!-- ExcelJS CDN（支持完整的单元格背景色写入） -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<!-- FileSaver 用于浏览器下载 -->
+<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+<!-- color-thief CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.0/color-thief.umd.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+
+  /* 滚动条美化 */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+  /* 上传区域拖拽样式 */
+  .upload-zone {
+    transition: all 0.2s ease;
+    border: 2px dashed #cbd5e1;
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: #3b82f6;
+    background-color: #eff6ff;
+  }
+
+  /* 加载动画 */
+  .loader-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(255,255,255,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999;
+  }
+  .loader-spinner {
+    width: 48px; height: 48px;
+    border: 4px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 网格预览容器 */
+  .grid-preview-container {
+    display: flex;
+    align-items: flex-start;
+  }
+  .grid-preview-container canvas {
+    display: block;
+    image-rendering: pixelated;
+  }
+  .row-labels, .col-labels {
+    display: flex;
+    flex-direction: column;
+  }
+  .row-labels span {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #64748b; font-weight: 600;
+  }
+  .col-labels {
+    flex-direction: row;
+  }
+  .col-labels span {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #64748b; font-weight: 600;
+  }
+
+  /* 悬浮气泡 */
+  .tooltip-bubble {
+    position: absolute;
+    pointer-events: none;
+    background: #1e293b;
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    transform: translate(-50%, -120%);
+  }
+  .tooltip-bubble::after {
+    content: '';
+    position: absolute;
+    top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1e293b;
+  }
+
+  /* 预设按钮 */
+  .preset-btn {
+    transition: all 0.15s ease;
+  }
+  .preset-btn:hover { background: #dbeafe; border-color: #3b82f6; }
+  .preset-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+
+  /* 响应式 */
+  @media (max-width: 1024px) {
+    .main-layout { flex-direction: column; }
+    .sidebar { width: 100% !important; max-width: 100% !important; }
+  }
+
+  /* Toast 提示 */
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+    z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    animation: toastIn 0.3s ease, toastOut 0.3s ease 2.5s forwards;
+  }
+  .toast-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+  .toast-warn { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
+  .toast-success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
+
+  /* 确认对话框遮罩 */
+  .confirm-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10001;
+    animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .confirm-dialog {
+    background: #fff; border-radius: 12px;
+    padding: 24px; max-width: 420px; width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  .confirm-dialog h3 { font-size: 16px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
+  .confirm-dialog p { font-size: 13px; color: #64748b; line-height: 1.6; margin-bottom: 20px; }
+  .confirm-dialog .btn-row { display: flex; gap: 10px; justify-content: flex-end; }
+  .confirm-dialog .btn-cancel {
+    padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 500;
+    border: 1px solid #d1d5db; background: #fff; color: #64748b; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .confirm-dialog .btn-cancel:hover { background: #f9fafb; }
+  .confirm-dialog .btn-confirm {
+    padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 500;
+    border: none; background: #3b82f6; color: #fff; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .confirm-dialog .btn-confirm:hover { background: #2563eb; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- ========== 加载遮罩 ========== -->
+<div id="loaderOverlay" class="loader-overlay hidden">
+  <div class="bg-white rounded-xl shadow-lg p-8 flex flex-col items-center gap-4">
+    <div class="loader-spinner"></div>
+    <p id="loaderText" class="text-gray-600 text-sm font-medium">处理中…</p>
+  </div>
+</div>
+
+<!-- ========== Toast 容器 ========== -->
+<div id="toastContainer"></div>
+
+<!-- ========== 1. 顶部标题栏 ========== -->
+<header class="bg-white border-b border-gray-200 shadow-sm">
+  <div class="px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+        </svg>
+      </div>
+      <h1 class="text-lg font-bold text-gray-800">Excel 拼豆模拟器 <span class="text-xs bg-primary-100 text-primary-700 px-2 py-0.5 rounded-full ml-1">V1.0</span></h1>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-gray-400">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+      <span>🔒 所有图片均在本地浏览器处理，不会上传任何服务器</span>
+    </div>
+  </div>
+</header>
+
+<!-- ========== 浏览器兼容提示 ========== -->
+<div id="browserWarning" class="hidden bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-center text-xs text-yellow-700">
+  ⚠️ 请使用 Chrome / Edge / Firefox 最新版本以获得最佳体验，不兼容 IE 浏览器
+</div>
+
+<!-- ========== 主体布局 ========== -->
+<div class="flex main-layout gap-0" style="min-height: calc(100vh - 120px);">
+
+  <!-- ========== 2. 左侧操作控制面板 ========== -->
+  <aside class="sidebar bg-white border-r border-gray-200 p-4 flex-shrink-0 overflow-y-auto" style="width: 260px; max-height: calc(100vh - 120px);">
+
+    <!-- 模块1：图片上传 -->
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        图片上传
+      </h2>
+
+      <!-- 上传区域 -->
+      <div id="uploadZone" class="upload-zone rounded-lg p-4 text-center cursor-pointer bg-gray-50">
+        <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.bmp" class="hidden">
+        <svg id="uploadIcon" class="w-8 h-8 mx-auto text-gray-300 mb-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        <p id="uploadPlaceholder" class="text-sm text-gray-400">点击或拖拽上传图片</p>
+        <p id="uploadHint" class="text-xs text-gray-300 mt-1">支持 JPG / PNG / BMP，最大 5MB</p>
+      </div>
+
+      <!-- 已上传图片信息 -->
+      <div id="uploadedInfo" class="hidden mt-3 bg-gray-50 rounded-lg p-3">
+        <div class="flex items-center justify-between">
+          <span id="fileName" class="text-sm text-gray-600 truncate max-w-[200px]"></span>
+          <button id="clearBtn" class="text-xs text-red-500 hover:text-red-700 hover:underline flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            清空图片
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 模块2：网格尺寸参数 -->
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zm12 0a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+        网格尺寸
+      </h2>
+
+      <!-- 输入框行 -->
+      <div class="flex items-center gap-3 mb-3">
+        <div class="flex-1">
+          <label class="text-xs text-gray-500 block mb-1">宽度（列）</label>
+          <input type="number" id="gridCols" min="8" max="100" value="32" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-primary-400 transition">
+        </div>
+        <span class="text-gray-300 mt-4">×</span>
+        <div class="flex-1">
+          <label class="text-xs text-gray-500 block mb-1">高度（行）</label>
+          <input type="number" id="gridRows" min="8" max="100" value="32" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-primary-400 transition">
+        </div>
+      </div>
+
+      <!-- 快捷预设 -->
+      <div class="flex gap-1.5 flex-wrap">
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="16" data-rows="16">16×16</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="24" data-rows="24">24×24</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 active" data-cols="32" data-rows="32">32×32</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="48" data-rows="48">48×48</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="64" data-rows="64">64×64</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="80" data-rows="80">80×80</button>
+        <button class="preset-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600" data-cols="100" data-rows="100">100×100</button>
+      </div>
+    </section>
+
+    <!-- 模块3：色彩减色参数 -->
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+        颜色设置
+      </h2>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">最大用色数量（2~64）</label>
+        <input type="number" id="maxColors" min="2" max="64" value="16" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-primary-400 transition">
+      </div>
+    </section>
+
+    <!-- 模块4：图片编辑 -->
+    <section id="imageEditSection" class="mb-6 hidden">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+        图片编辑
+      </h2>
+      <div class="flex flex-wrap gap-1.5">
+        <button id="btnRemoveBg" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="去除纯白/透明背景，保留主体">
+          🧹 去背景
+        </button>
+        <button id="btnRotateCW" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="顺时针旋转90°">
+          ↻ 旋转
+        </button>
+        <button id="btnRotateCCW" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="逆时针旋转90°">
+          ↺ 旋转
+        </button>
+        <button id="btnFlipH" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="左右镜像">
+          ↔ 水平翻转
+        </button>
+        <button id="btnFlipV" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="垂直翻转">
+          ↕ 垂直翻转
+        </button>
+        <button id="btnEnhanceEdge" class="edit-btn px-2.5 py-1.5 text-xs border border-gray-200 rounded-md text-gray-600 hover:bg-blue-50 hover:border-blue-300 transition" title="Sobel边缘检测，加深图案轮廓">
+          ✦ 轮廓强化
+        </button>
+      </div>
+    </section>
+
+    <!-- 模块5：坐标模式切换 -->
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        预览模式
+      </h2>
+      <div class="flex items-center bg-gray-100 rounded-lg p-1">
+        <button id="modeBlueprint" class="flex-1 py-2 text-xs font-medium rounded-md transition bg-white shadow-sm text-gray-800">RGB色值模式</button>
+        <button id="modeCoordinate" class="flex-1 py-2 text-xs font-medium rounded-md transition text-gray-500">坐标模式</button>
+      </div>
+    </section>
+
+    <!-- 颜色图例 -->
+    <section id="colorLegend" class="hidden">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3">颜色图例</h2>
+      <div id="colorLegendList" class="flex flex-wrap gap-1"></div>
+    </section>
+  </aside>
+
+  <!-- ========== 3. 中央预览区 ========== -->
+  <main class="flex-1 overflow-hidden flex flex-col" style="max-height: calc(100vh - 120px);">
+
+    <!-- 原图缩略图（顶部小条） -->
+    <div id="originalThumbBar" class="flex-shrink-0 px-5 pt-4 pb-0">
+      <div class="flex items-center gap-2">
+        <h3 class="text-xs font-semibold text-gray-500 flex items-center gap-1.5 flex-shrink-0">
+          <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          原图
+        </h3>
+        <div id="originalPreview" class="bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-center overflow-hidden" style="width:120px; height:90px;">
+          <p id="originalPlaceholder" class="text-xs text-gray-400">未上传</p>
+          <img id="originalImage" class="hidden w-full h-full object-contain" alt="原图预览">
+        </div>
+        <div class="text-[10px] text-gray-400 ml-1 flex-shrink-0">
+          → 拼豆网格预览
+        </div>
+      </div>
+    </div>
+
+    <!-- 网格预览（主区域，占满剩余空间） -->
+    <div class="flex-1 p-5 pt-3 overflow-hidden flex flex-col min-h-0">
+      <div id="gridPreviewArea" class="flex-1 bg-gray-50 rounded-lg border border-gray-200 overflow-auto min-h-0" style="display:block;">
+        <p id="gridPlaceholder" class="text-sm text-gray-400 flex items-center justify-center h-full">请先上传图片</p>
+        <div id="gridWrapper" class="hidden"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ========== 4. 底部功能按钮区 ========== -->
+<footer class="bg-white border-t border-gray-200 shadow-sm">
+  <div class="px-4 py-4 flex items-center justify-between">
+    <div class="text-xs text-gray-400">
+      当前网格：<span id="footerGridInfo" class="text-gray-600 font-medium">24 × 24</span>
+      &nbsp;|&nbsp; 颜色数：<span id="footerColorInfo" class="text-gray-600 font-medium">—</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="downloadExcelBtn" class="bg-primary-500 hover:bg-primary-600 active:bg-primary-700 text-white font-medium px-5 py-2.5 rounded-lg text-sm transition flex items-center gap-2 shadow-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        导出 Excel
+      </button>
+      <button id="downloadImageBtn" class="bg-green-500 hover:bg-green-600 active:bg-green-700 text-white font-medium px-5 py-2.5 rounded-lg text-sm transition flex items-center gap-2 shadow-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        导出图片
+      </button>
+    </div>
+  </div>
+</footer>
+
+<!-- ========== 悬浮提示气泡 ========== -->
+<div id="tooltip" class="tooltip-bubble hidden"></div>
+
+<!-- ========== 图片编辑模块 ========== -->
+<script src="image-edit.js"></script>
+
+<!-- ========== 核心 JavaScript ========== -->
+<script>
+(function() {
+  'use strict';
+
+  // ==================== 状态管理 ====================
+  const state = {
+    imageData: null,         // 原始 Image 对象
+    gridData: null,          // gridData[行][列] 二维数组
+    gridCols: 32,
+    gridRows: 32,
+    maxColors: 16,
+    mode: 'blueprint',       // 'blueprint' | 'coordinate'
+    uniqueColors: []         // 去重颜色列表
+  };
+
+  // ==================== DOM 缓存 ====================
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
+
+  const dom = {
+    uploadZone: $('#uploadZone'),
+    fileInput: $('#fileInput'),
+    uploadPlaceholder: $('#uploadPlaceholder'),
+    uploadIcon: $('#uploadIcon'),
+    uploadedInfo: $('#uploadedInfo'),
+    fileName: $('#fileName'),
+    clearBtn: $('#clearBtn'),
+    gridCols: $('#gridCols'),
+    gridRows: $('#gridRows'),
+    maxColors: $('#maxColors'),
+    modeBlueprint: $('#modeBlueprint'),
+    modeCoordinate: $('#modeCoordinate'),
+    originalPreview: $('#originalPreview'),
+    originalPlaceholder: $('#originalPlaceholder'),
+    originalImage: $('#originalImage'),
+    gridPreviewArea: $('#gridPreviewArea'),
+    gridPlaceholder: $('#gridPlaceholder'),
+    gridWrapper: $('#gridWrapper'),
+    downloadExcelBtn: $('#downloadExcelBtn'),
+    downloadImageBtn: $('#downloadImageBtn'),
+    loaderOverlay: $('#loaderOverlay'),
+    loaderText: $('#loaderText'),
+    toastContainer: $('#toastContainer'),
+    tooltip: $('#tooltip'),
+    footerGridInfo: $('#footerGridInfo'),
+    footerColorInfo: $('#footerColorInfo'),
+    colorLegend: $('#colorLegend'),
+    colorLegendList: $('#colorLegendList'),
+    browserWarning: $('#browserWarning'),
+    // 图片编辑按钮
+    imageEditSection: $('#imageEditSection'),
+    btnRemoveBg: $('#btnRemoveBg'),
+    btnRotateCW: $('#btnRotateCW'),
+    btnRotateCCW: $('#btnRotateCCW'),
+    btnFlipH: $('#btnFlipH'),
+    btnFlipV: $('#btnFlipV'),
+    btnEnhanceEdge: $('#btnEnhanceEdge')
+  };
+
+  // ==================== 工具函数 ====================
+
+  /** Excel 列索引 -> 列名 (0=A, 1=B, ..., 25=Z, 26=AA, ...) */
+  function colIndexToName(idx) {
+    let name = '';
+    while (idx >= 0) {
+      name = String.fromCharCode(65 + (idx % 26)) + name;
+      idx = Math.floor(idx / 26) - 1;
+    }
+    return name;
+  }
+
+  /** 显示 Toast */
+  function showToast(msg, type = 'error') {
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.textContent = msg;
+    dom.toastContainer.appendChild(el);
+    setTimeout(() => el.remove(), 3000);
+  }
+
+  /** 显示/隐藏加载动画 */
+  function showLoader(text = '处理中…') {
+    dom.loaderText.textContent = text;
+    dom.loaderOverlay.classList.remove('hidden');
+  }
+  function hideLoader() {
+    dom.loaderOverlay.classList.add('hidden');
+  }
+
+  /** 防抖 */
+  function debounce(fn, delay = 250) {
+    let timer;
+    return function(...args) {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+  }
+
+  /** 检测浏览器兼容性 */
+  function checkBrowser() {
+    const ua = navigator.userAgent;
+    if (/MSIE|Trident/.test(ua)) {
+      dom.browserWarning.classList.remove('hidden');
+    }
+  }
+
+  // ==================== 缓存管理 ====================
+  function saveCache() {
+    try {
+      localStorage.setItem('bead_sim_cache', JSON.stringify({
+        gridCols: state.gridCols,
+        gridRows: state.gridRows,
+        maxColors: state.maxColors,
+        mode: state.mode
+      }));
+    } catch(e) { /* ignore */ }
+  }
+
+  function loadCache() {
+    try {
+      const raw = localStorage.getItem('bead_sim_cache');
+      if (raw) {
+        const cache = JSON.parse(raw);
+        if (cache.gridCols >= 8 && cache.gridCols <= 100) state.gridCols = cache.gridCols;
+        if (cache.gridRows >= 8 && cache.gridRows <= 100) state.gridRows = cache.gridRows;
+        if (cache.maxColors >= 2 && cache.maxColors <= 64) state.maxColors = cache.maxColors;
+        if (cache.mode === 'blueprint' || cache.mode === 'coordinate') state.mode = cache.mode;
+      }
+    } catch(e) { /* ignore */ }
+  }
+
+  function syncUIFromState() {
+    dom.gridCols.value = state.gridCols;
+    dom.gridRows.value = state.gridRows;
+    dom.maxColors.value = state.maxColors;
+    if (state.mode === 'blueprint') {
+      setModeUI('blueprint');
+    } else {
+      setModeUI('coordinate');
+    }
+    updatePresetActive();
+    dom.footerGridInfo.textContent = `${state.gridCols} × ${state.gridRows}`;
+  }
+
+  function setModeUI(mode) {
+    state.mode = mode;
+    if (mode === 'blueprint') {
+      dom.modeBlueprint.className = 'flex-1 py-2 text-xs font-medium rounded-md transition bg-white shadow-sm text-gray-800';
+      dom.modeCoordinate.className = 'flex-1 py-2 text-xs font-medium rounded-md transition text-gray-500';
+    } else {
+      dom.modeCoordinate.className = 'flex-1 py-2 text-xs font-medium rounded-md transition bg-white shadow-sm text-gray-800';
+      dom.modeBlueprint.className = 'flex-1 py-2 text-xs font-medium rounded-md transition text-gray-500';
+    }
+    saveCache();
+    if (state.gridData) renderGrid();
+  }
+
+  function updatePresetActive() {
+    $$('.preset-btn').forEach(btn => {
+      const c = parseInt(btn.dataset.cols), r = parseInt(btn.dataset.rows);
+      btn.classList.toggle('active', c === state.gridCols && r === state.gridRows);
+    });
+  }
+
+  // ==================== 图片上传 ====================
+
+  /** 最大边长阈值（像素），超过则提示压缩 */
+  const MAX_IMAGE_DIMENSION = 1200;
+
+  function handleFile(file) {
+    if (!file) return;
+
+    // 格式校验
+    const validTypes = ['image/jpeg', 'image/png', 'image/bmp'];
+    const validExts = ['.jpg', '.jpeg', '.png', '.bmp'];
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+    if (!validTypes.includes(file.type) && !validExts.includes(ext)) {
+      showToast('不支持的文件格式，请上传 JPG / PNG / BMP 图片', 'error');
+      return;
+    }
+
+    // 读取文件获取图片尺寸
+    showLoader('正在解析图片…');
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        const origW = img.naturalWidth;
+        const origH = img.naturalHeight;
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
+
+        // 检查图片尺寸是否过大
+        if (origW > MAX_IMAGE_DIMENSION || origH > MAX_IMAGE_DIMENSION) {
+          hideLoader();
+          showCompressConfirm(file, img, origW, origH, fileSizeMB, e.target.result);
+          return;
+        }
+
+        // 尺寸合适，直接处理
+        finishUpload(img, file, e.target.result);
+      };
+      img.onerror = function() {
+        hideLoader();
+        showToast('图片解析出错，请更换图片重试', 'error');
+      };
+      img.src = e.target.result;
+    };
+    reader.onerror = function() {
+      hideLoader();
+      showToast('文件读取失败，请重试', 'error');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  /** 弹出压缩确认对话框 */
+  function showCompressConfirm(file, img, origW, origH, fileSizeMB, dataUrl) {
+    // 计算压缩后的尺寸
+    const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(origW, origH));
+    const newW = Math.round(origW * scale);
+    const newH = Math.round(origH * scale);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog">
+        <h3>图片尺寸较大</h3>
+        <p>
+          您上传的图片尺寸为 <b>${origW} × ${origH}</b> 像素（${fileSizeMB} MB），
+          可能影响处理性能。<br><br>
+          是否压缩为 <b>${newW} × ${newH}</b> 像素后再处理？<br>
+          <span style="font-size:11px;color:#94a3b8;">（压缩在浏览器本地完成，不会上传服务器）</span>
+        </p>
+        <div class="btn-row">
+          <button class="btn-cancel" id="compressCancel">取消上传</button>
+          <button class="btn-confirm" id="compressConfirm">压缩并处理</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // 取消上传
+    overlay.querySelector('#compressCancel').onclick = function() {
+      overlay.remove();
+      dom.fileInput.value = '';
+    };
+
+    // 压缩并继续处理
+    overlay.querySelector('#compressConfirm').onclick = function() {
+      overlay.remove();
+      showLoader('正在压缩图片…');
+      compressImage(img, newW, newH, 0.85, function(compressedDataUrl) {
+        const compressedImg = new Image();
+        compressedImg.onload = function() {
+          finishUpload(compressedImg, file, compressedDataUrl);
+        };
+        compressedImg.onerror = function() {
+          hideLoader();
+          showToast('图片压缩失败，请重试', 'error');
+        };
+        compressedImg.src = compressedDataUrl;
+      });
+    };
+
+    // 点击遮罩关闭
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) {
+        overlay.remove();
+        dom.fileInput.value = '';
+      }
+    });
+  }
+
+  /** Canvas 图片压缩（浏览器本地） */
+  function compressImage(img, targetW, targetH, quality, callback) {
+    setTimeout(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'medium';
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+      callback(canvas.toDataURL('image/jpeg', quality));
+    }, 50);
+  }
+
+  /** 完成图片上传后的通用处理 */
+  function finishUpload(img, file, dataUrl) {
+    state.imageData = img;
+    dom.uploadPlaceholder.classList.add('hidden');
+    dom.uploadIcon.classList.add('hidden');
+    dom.uploadedInfo.classList.remove('hidden');
+    dom.fileName.textContent = file.name;
+    dom.originalPlaceholder.classList.add('hidden');
+    dom.originalImage.src = dataUrl;
+    dom.originalImage.classList.remove('hidden');
+    dom.gridPlaceholder.classList.add('hidden');
+    // 显示图片编辑区域
+    dom.imageEditSection.classList.remove('hidden');
+    hideLoader();
+    processImage();
+  }
+
+  function clearImage() {
+    state.imageData = null;
+    state.gridData = null;
+    state.uniqueColors = [];
+    dom.fileInput.value = '';
+    dom.uploadPlaceholder.classList.remove('hidden');
+    dom.uploadIcon.classList.remove('hidden');
+    dom.uploadedInfo.classList.add('hidden');
+    dom.originalImage.classList.add('hidden');
+    dom.originalPlaceholder.classList.remove('hidden');
+    dom.gridPlaceholder.classList.remove('hidden');
+    dom.gridWrapper.classList.add('hidden');
+    dom.gridWrapper.innerHTML = '';
+    dom.colorLegend.classList.add('hidden');
+    dom.colorLegendList.innerHTML = '';
+    dom.footerColorInfo.textContent = '—';
+    dom.footerGridInfo.textContent = `${state.gridCols} × ${state.gridRows}`;
+    // 隐藏图片编辑区域
+    dom.imageEditSection.classList.add('hidden');
+  }
+
+  // ==================== 图片处理核心：像素采样 + 色彩聚类 ====================
+  function processImage() {
+    if (!state.imageData) return;
+
+    const cols = state.gridCols;
+    const rows = state.gridRows;
+    const maxColors = state.maxColors;
+
+    // 创建 Canvas 缩放图片到 cols×rows 像素
+    const canvas = document.createElement('canvas');
+    canvas.width = cols;
+    canvas.height = rows;
+    const ctx = canvas.getContext('2d');
+    // 关闭平滑，使用最近邻采样
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(state.imageData, 0, 0, cols, rows);
+
+    // 读取每个像素
+    const imageData = ctx.getImageData(0, 0, cols, rows);
+    const pixels = imageData.data;
+
+    // 提取所有像素颜色
+    const rawColors = [];
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const idx = (y * cols + x) * 4;
+        const r = pixels[idx];
+        const g = pixels[idx + 1];
+        const b = pixels[idx + 2];
+        const a = pixels[idx + 3];
+        // 忽略透明像素，替换为白色
+        const color = a < 128 ? [255, 255, 255] : [r, g, b];
+        rawColors.push({ x, y, rgb: color });
+      }
+    }
+
+    // 色彩聚类（K-means 简化版 + 最近邻映射）
+    const clusteredColors = clusterColors(rawColors, maxColors);
+
+    // 构建 gridData
+    const gridData = [];
+    for (let y = 0; y < rows; y++) {
+      gridData[y] = [];
+      for (let x = 0; x < cols; x++) {
+        const pixel = clusteredColors.find(p => p.x === x && p.y === y);
+        const [r, g, b] = pixel ? pixel.rgb : [255, 255, 255];
+        const excelCol = colIndexToName(x);
+        const excelRow = String(y + 1);
+        gridData[y][x] = {
+          x,
+          y,
+          excelCol,
+          excelRow,
+          excelCoord: `${excelCol}${excelRow}`,
+          rgb: `rgb(${r},${g},${b})`,
+          r, g, b
+        };
+      }
+    }
+
+    state.gridData = gridData;
+    updateColorStats();
+    renderGrid();
+    updateColorLegend();
+  }
+
+  /** 色彩聚类：使用 ColorThief 风格的 MMCQ 算法（简化版：K-means++） */
+  function clusterColors(pixels, k) {
+    // 收集所有唯一颜色
+    const colorMap = new Map();
+    for (const p of pixels) {
+      const key = p.rgb.join(',');
+      if (!colorMap.has(key)) {
+        colorMap.set(key, { rgb: [...p.rgb], count: 0, pixels: [] });
+      }
+      colorMap.get(key).count++;
+      colorMap.get(key).pixels.push(p);
+    }
+
+    let clusters = Array.from(colorMap.values());
+
+    // 如果颜色数已经 <= k，直接返回
+    if (clusters.length <= k) {
+      return pixels.map(p => ({ x: p.x, y: p.y, rgb: p.rgb }));
+    }
+
+    // 使用 K-means 聚类
+    const allUniqueColors = clusters.map(c => c.rgb);
+
+    // 初始化聚类中心（K-means++）
+    const centers = [allUniqueColors[Math.floor(Math.random() * allUniqueColors.length)]];
+    for (let i = 1; i < k; i++) {
+      // 计算每个颜色到最近中心的距离
+      const distances = allUniqueColors.map(color => {
+        let minDist = Infinity;
+        for (const center of centers) {
+          const d = colorDistance(color, center);
+          if (d < minDist) minDist = d;
+        }
+        return minDist * minDist;
+      });
+      const totalDist = distances.reduce((a, b) => a + b, 0);
+      let rand = Math.random() * totalDist;
+      let selectedIdx = 0;
+      for (let j = 0; j < distances.length; j++) {
+        rand -= distances[j];
+        if (rand <= 0) { selectedIdx = j; break; }
+      }
+      centers.push(allUniqueColors[selectedIdx]);
+    }
+
+    // 迭代 K-means
+    const maxIter = 20;
+    for (let iter = 0; iter < maxIter; iter++) {
+      // 分配每个颜色到最近中心
+      const assignments = new Array(allUniqueColors.length);
+      const newCenters = centers.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+
+      for (let i = 0; i < allUniqueColors.length; i++) {
+        let minDist = Infinity;
+        let bestCenter = 0;
+        for (let j = 0; j < centers.length; j++) {
+          const d = colorDistance(allUniqueColors[i], centers[j]);
+          if (d < minDist) { minDist = d; bestCenter = j; }
+        }
+        assignments[i] = bestCenter;
+        newCenters[bestCenter].r += allUniqueColors[i][0] * clusters[i].count;
+        newCenters[bestCenter].g += allUniqueColors[i][1] * clusters[i].count;
+        newCenters[bestCenter].b += allUniqueColors[i][2] * clusters[i].count;
+        newCenters[bestCenter].count += clusters[i].count;
+      }
+
+      // 更新中心
+      let changed = false;
+      for (let j = 0; j < k; j++) {
+        if (newCenters[j].count === 0) continue;
+        const nr = Math.round(newCenters[j].r / newCenters[j].count);
+        const ng = Math.round(newCenters[j].g / newCenters[j].count);
+        const nb = Math.round(newCenters[j].b / newCenters[j].count);
+        if (centers[j][0] !== nr || centers[j][1] !== ng || centers[j][2] !== nb) changed = true;
+        centers[j] = [nr, ng, nb];
+      }
+      if (!changed) break;
+    }
+
+    // 构建颜色映射表：每个唯一颜色 -> 最近的聚类中心
+    const colorToCluster = new Map();
+    for (let i = 0; i < allUniqueColors.length; i++) {
+      const origKey = allUniqueColors[i].join(',');
+      let minDist = Infinity;
+      let bestCenter = 0;
+      for (let j = 0; j < k; j++) {
+        const d = colorDistance(allUniqueColors[i], centers[j]);
+        if (d < minDist) { minDist = d; bestCenter = j; }
+      }
+      colorToCluster.set(origKey, centers[bestCenter]);
+    }
+
+    // 返回映射后的像素
+    return pixels.map(p => {
+      const key = p.rgb.join(',');
+      const mapped = colorToCluster.get(key) || p.rgb;
+      return { x: p.x, y: p.y, rgb: mapped };
+    });
+  }
+
+  /** RGB 颜色欧氏距离（加权，更符合人眼感知） */
+  function colorDistance(c1, c2) {
+    const rMean = (c1[0] + c2[0]) / 2;
+    const dr = c1[0] - c2[0];
+    const dg = c1[1] - c2[1];
+    const db = c1[2] - c2[2];
+    return Math.sqrt(
+      (2 + rMean / 256) * dr * dr +
+      4 * dg * dg +
+      (2 + (255 - rMean) / 256) * db * db
+    );
+  }
+
+  /** 更新颜色统计 */
+  function updateColorStats() {
+    if (!state.gridData) return;
+    const colorCount = new Map();
+    for (const row of state.gridData) {
+      for (const cell of row) {
+        colorCount.set(cell.rgb, (colorCount.get(cell.rgb) || 0) + 1);
+      }
+    }
+    state.uniqueColors = Array.from(colorCount.entries())
+      .map(([rgb, count]) => ({ rgb, count }))
+      .sort((a, b) => b.count - a.count);
+    dom.footerColorInfo.textContent = `${state.uniqueColors.length} 种`;
+  }
+
+  /** 更新颜色图例 */
+  function updateColorLegend() {
+    if (!state.uniqueColors.length) {
+      dom.colorLegend.classList.add('hidden');
+      return;
+    }
+    dom.colorLegend.classList.remove('hidden');
+    dom.colorLegendList.innerHTML = state.uniqueColors.map(c =>
+      `<div class="flex items-center gap-1.5 bg-gray-50 rounded px-2 py-1" title="${c.rgb} (${c.count}颗)">
+        <span class="w-3.5 h-3.5 rounded-sm border border-gray-300" style="background:${c.rgb}"></span>
+        <span class="text-[10px] text-gray-500">×${c.count}</span>
+      </div>`
+    ).join('');
+  }
+
+  // ==================== 网格渲染 ====================
+  function renderGrid() {
+    if (!state.gridData) return;
+
+    const rows = state.gridRows;
+    const cols = state.gridCols;
+    const mode = state.mode;
+
+    // 动态计算 cellSize：基于容器宽度，高度不够时可上下滚动
+    const container = dom.gridPreviewArea;
+    const containerWidth = container.clientWidth - 40;  // 减去内边距
+
+    // 根据最大列名长度动态计算行标签宽度（AA=2字符，AAA=3字符）
+    const maxColName = colIndexToName(cols - 1);
+    const labelWidth = Math.max(30, maxColName.length * 14 + 4); // 每字符约14px
+
+    // 基于宽度计算最大可用 cellSize
+    const maxCellByWidth = Math.floor((containerWidth - labelWidth) / cols);
+
+    // cellSize 范围：最小 8px，最大 40px（高度不够时自动出现滚动条）
+    let cellSize = Math.max(8, Math.min(40, maxCellByWidth));
+
+    // 标签字体大小随 cellSize 自适应
+    const labelFontSize = Math.max(9, Math.min(12, cellSize * 0.45));
+
+    dom.gridPlaceholder.classList.add('hidden');
+    dom.gridWrapper.classList.remove('hidden');
+
+    // 构建 HTML
+    let html = '<div class="grid-preview-container" style="position:relative;">';
+
+    // 左侧行标签
+    html += `<div class="row-labels flex-shrink-0" style="padding-top:${labelFontSize + 6}px;">`;
+    for (let y = 0; y < rows; y++) {
+      html += `<span style="height:${cellSize}px; width:${labelWidth}px; font-size:${labelFontSize}px;">${y + 1}</span>`;
+    }
+    html += '</div>';
+
+    // 主画布区域
+    html += '<div>';
+    // 顶部列标签（宽度和 cellSize 一致，但双字母时保证最小宽度）
+    html += `<div class="col-labels" style="margin-left:${labelWidth}px;">`;
+    for (let x = 0; x < cols; x++) {
+      const colName = colIndexToName(x);
+      html += `<span style="width:${cellSize}px; min-width:${cellSize}px; font-size:${labelFontSize}px; white-space:nowrap; overflow:hidden;">${colName}</span>`;
+    }
+    html += '</div>';
+
+    // 网格画布
+    const canvasWidth = cols * cellSize;
+    const canvasHeight = rows * cellSize;
+    html += `<div style="position:relative; width:${canvasWidth}px; height:${canvasHeight}px;">`;
+    html += `<canvas id="gridCanvas" width="${canvasWidth}" height="${canvasHeight}" style="display:block; border:1px solid #e2e8f0;"></canvas>`;
+    html += '</div></div></div>';
+
+    // 缩放提示
+    if (cellSize < 12 && (cols > 30 || rows > 30)) {
+      html += '<p class="text-[10px] text-gray-400 mt-1 text-center">💡 网格较大时格子会变小，可使用滚轮缩放或调整行列数</p>';
+    }
+
+    dom.gridWrapper.innerHTML = html;
+
+    // 绘制 Canvas
+    requestAnimationFrame(() => {
+      const canvas = $('#gridCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const cell = state.gridData[y][x];
+          const px = x * cellSize;
+          const py = y * cellSize;
+
+          // 填充色块
+          ctx.fillStyle = cell.rgb;
+          ctx.fillRect(px, py, cellSize, cellSize);
+
+          // 网格线（cellSize 很小时线更细）
+          ctx.strokeStyle = cellSize <= 10 ? '#e5e7eb' : '#d1d5db';
+          ctx.lineWidth = cellSize <= 10 ? 0.3 : 0.5;
+          ctx.strokeRect(px, py, cellSize, cellSize);
+
+          // 写入文字：蓝图模式显示RGB色值，坐标模式显示Excel坐标
+          if (cellSize >= 14) {
+            ctx.fillStyle = getContrastColor(cell.r, cell.g, cell.b);
+            const fontSize = Math.max(6, Math.min(11, cellSize * 0.38));
+            ctx.font = `${fontSize}px -apple-system, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (mode === 'coordinate') {
+              ctx.fillText(cell.excelCoord, px + cellSize / 2, py + cellSize / 2);
+            } else {
+              // 蓝图模式：显示 RGB 色值（与 Excel 单元格内容一致）
+              const rgbText = `RGB(${cell.r},${cell.g},${cell.b})`;
+              ctx.fillText(rgbText, px + cellSize / 2, py + cellSize / 2);
+            }
+          }
+        }
+      }
+
+      // 绑定鼠标事件
+      attachGridEvents(canvas, cellSize, cols, rows);
+    });
+  }
+
+  /** 获取对比文字颜色（黑/白） */
+  function getContrastColor(r, g, b) {
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.55 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
+  }
+
+  /** 绑定网格鼠标悬浮事件 */
+  function attachGridEvents(canvas, cellSize, cols, rows) {
+    canvas.onmousemove = function(e) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const cx = Math.floor(mx / cellSize);
+      const cy = Math.floor(my / cellSize);
+
+      if (cx >= 0 && cx < cols && cy >= 0 && cy < rows && state.gridData) {
+        const cell = state.gridData[cy][cx];
+        dom.tooltip.classList.remove('hidden');
+        dom.tooltip.textContent = `${cell.excelCoord} | RGB(${cell.r},${cell.g},${cell.b})`;
+        dom.tooltip.style.left = (e.clientX) + 'px';
+        dom.tooltip.style.top = (e.clientY - 10) + 'px';
+        canvas.style.cursor = 'crosshair';
+      } else {
+        dom.tooltip.classList.add('hidden');
+        canvas.style.cursor = 'default';
+      }
+    };
+    canvas.onmouseleave = function() {
+      dom.tooltip.classList.add('hidden');
+    };
+  }
+
+  // ==================== 防抖处理函数 ====================
+  const debouncedProcess = debounce(() => {
+    if (state.imageData) {
+      showLoader('正在重新计算色块…');
+      // 使用 requestAnimationFrame 延迟确保 UI 更新
+      requestAnimationFrame(() => {
+        processImage();
+        hideLoader();
+      });
+    }
+  }, 300);
+
+  // 窗口缩放时仅重新渲染网格（不重新计算颜色）
+  const debouncedRerender = debounce(() => {
+    if (state.gridData) {
+      renderGrid();
+    }
+  }, 200);
+
+  // ==================== Excel 生成与下载（ExcelJS - 支持真正的背景色） ====================
+  async function generateExcel() {
+    if (!state.gridData) {
+      showToast('请先上传图片再生成图纸', 'warn');
+      return;
+    }
+
+    showLoader('正在生成 Excel 文件…');
+
+    try {
+      const rows = state.gridRows;
+      const cols = state.gridCols;
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = '拼豆图纸生成器';
+      wb.created = new Date();
+
+      // ===== Sheet1：拼豆主图纸（纯色块） =====
+      const ws1 = wb.addWorksheet('拼豆主图纸', {
+        views: [{ state: 'frozen', ySplit: 1, xSplit: 1 }]
+      });
+
+      // 设置列宽（正方形格子）
+      for (let x = 0; x < cols; x++) {
+        ws1.getColumn(x + 1).width = 4.5;
+      }
+      // 设置行高
+      for (let y = 0; y < rows; y++) {
+        ws1.getRow(y + 1).height = 28;
+      }
+
+      // 逐格填充颜色 + 边框
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
+      };
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const cell = state.gridData[y][x];
+          const excelCell = ws1.getCell(y + 1, x + 1);
+          const hexBg = rgbToHex(cell.r, cell.g, cell.b);
+
+          excelCell.value = '';
+          excelCell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FF' + hexBg }
+          };
+          excelCell.border = thinBorder;
+          excelCell.alignment = { horizontal: 'center', vertical: 'center' };
+        }
+      }
+
+      // ===== Sheet2：颜色统计清单 =====
+      const ws2 = wb.addWorksheet('颜色统计清单');
+
+      ws2.getColumn(1).width = 16;
+      ws2.getColumn(2).width = 22;
+      ws2.getColumn(3).width = 10;
+
+      const colorCountMap = new Map();
+      for (const row of state.gridData) {
+        for (const cell of row) {
+          colorCountMap.set(cell.rgb, (colorCountMap.get(cell.rgb) || 0) + 1);
+        }
+      }
+
+      const totalBeads = rows * cols;
+
+      // 汇总行
+      ws2.getCell('A1').value = '拼豆总颗数：';
+      ws2.getCell('A1').font = { bold: true, size: 12 };
+      ws2.getCell('B1').value = totalBeads;
+      ws2.getCell('B1').font = { bold: true, size: 12 };
+
+      // 表头
+      ws2.getCell('A3').value = '颜色色块';
+      ws2.getCell('B3').value = 'RGB 色值';
+      ws2.getCell('C3').value = '数量';
+      for (const col of ['A3', 'B3', 'C3']) {
+        ws2.getCell(col).font = { bold: true };
+        ws2.getCell(col).fill = {
+          type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' }
+        };
+      }
+
+      // 颜色数据行
+      let rowIdx = 4;
+      for (const [rgb, count] of colorCountMap) {
+        const match = rgb.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (match) {
+          const hex = rgbToHex(parseInt(match[1]), parseInt(match[2]), parseInt(match[3]));
+          const colorCell = ws2.getCell(rowIdx, 1);
+          colorCell.value = rgb;
+          colorCell.fill = {
+            type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex }
+          };
+
+          ws2.getCell(rowIdx, 2).value = rgb;
+          ws2.getCell(rowIdx, 3).value = count;
+          rowIdx++;
+        }
+      }
+
+      // ===== 生成并下载 .xlsx =====
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+      saveAs(blob, `拼豆图纸_${dateStr}.xlsx`);
+
+      hideLoader();
+      showToast('Excel 图纸生成成功！', 'success');
+    } catch (err) {
+      hideLoader();
+      console.error('Excel 生成错误：', err);
+      showToast('生成 Excel 时出错，请重试', 'error');
+    }
+  }
+
+  // ==================== 图片导出（带坐标标签，格子大小与网页预览一致） ====================
+  function generateImage() {
+    if (!state.gridData) {
+      showToast('请先上传图片再导出图片', 'warn');
+      return;
+    }
+
+    showLoader('正在生成图片…');
+
+    setTimeout(() => {
+      try {
+        const rows = state.gridRows;
+        const cols = state.gridCols;
+        const mode = state.mode;
+
+        // 使用与 renderGrid 相同的 cellSize 计算逻辑
+        const container = dom.gridPreviewArea;
+        const containerWidth = container.clientWidth - 40;
+        const maxColName = colIndexToName(cols - 1);
+        const labelWidth = Math.max(30, maxColName.length * 14 + 4);
+        const maxCellByWidth = Math.floor((containerWidth - labelWidth) / cols);
+        let cellSize = Math.max(8, Math.min(40, maxCellByWidth));
+        const labelFontSize = Math.max(9, Math.min(12, cellSize * 0.45));
+
+        // 计算总画布尺寸
+        const totalWidth = labelWidth + cols * cellSize + 4; // +4 padding
+        const headerHeight = labelFontSize + 8;
+        const totalHeight = headerHeight + rows * cellSize + 4;
+
+        // 创建导出 Canvas
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = totalWidth;
+        exportCanvas.height = totalHeight;
+        const ctx = exportCanvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+
+        // 白色背景
+        ctx.fillStyle = '#f9fafb';
+        ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+        // 绘制列标签（顶部）
+        ctx.fillStyle = '#64748b';
+        ctx.font = `bold ${labelFontSize}px -apple-system, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (let x = 0; x < cols; x++) {
+          const colName = colIndexToName(x);
+          const cx = labelWidth + x * cellSize + cellSize / 2;
+          ctx.fillText(colName, cx, headerHeight / 2);
+        }
+
+        // 绘制行标签（左侧）
+        ctx.textAlign = 'center';
+        for (let y = 0; y < rows; y++) {
+          const cy = headerHeight + y * cellSize + cellSize / 2;
+          ctx.fillText(String(y + 1), labelWidth / 2, cy);
+        }
+
+        // 绘制色块 + 网格线 + 文字
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            const cell = state.gridData[y][x];
+            const px = labelWidth + x * cellSize;
+            const py = headerHeight + y * cellSize;
+
+            // 填充色块
+            ctx.fillStyle = cell.rgb;
+            ctx.fillRect(px, py, cellSize, cellSize);
+
+            // 网格线
+            ctx.strokeStyle = cellSize <= 10 ? '#e5e7eb' : '#d1d5db';
+            ctx.lineWidth = cellSize <= 10 ? 0.3 : 0.5;
+            ctx.strokeRect(px, py, cellSize, cellSize);
+
+            // 文字标注
+            if (cellSize >= 14) {
+              ctx.fillStyle = getContrastColor(cell.r, cell.g, cell.b);
+              const fontSize = Math.max(6, Math.min(11, cellSize * 0.38));
+              ctx.font = `${fontSize}px -apple-system, sans-serif`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              const textX = px + cellSize / 2;
+              const textY = py + cellSize / 2;
+              if (mode === 'coordinate') {
+                ctx.fillText(cell.excelCoord, textX, textY);
+              } else {
+                ctx.fillText(`RGB(${cell.r},${cell.g},${cell.b})`, textX, textY);
+              }
+            }
+          }
+        }
+
+        // 导出为 PNG 并下载
+        exportCanvas.toBlob((blob) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const now = new Date();
+          const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+          a.href = url;
+          a.download = `拼豆图纸_${dateStr}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          hideLoader();
+          showToast('图片导出成功！', 'success');
+        }, 'image/png');
+      } catch (err) {
+        hideLoader();
+        console.error('图片导出错误：', err);
+        showToast('导出图片时出错，请重试', 'error');
+      }
+    }, 100);
+  }
+
+  /** RGB 转 Hex */
+  function rgbToHex(r, g, b) {
+    return [r, g, b].map(x => x.toString(16).padStart(2, '0').toUpperCase()).join('');
+  }
+
+  /** 获取对比色 Hex */
+  function getContrastHex(r, g, b) {
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.55 ? '333333' : 'FFFFFF';
+  }
+
+  // ==================== 事件绑定 ====================
+
+  // 上传区域点击
+  dom.uploadZone.addEventListener('click', () => dom.fileInput.click());
+
+  // 文件选择
+  dom.fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) handleFile(e.target.files[0]);
+  });
+
+  // 拖拽上传
+  dom.uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dom.uploadZone.classList.add('drag-over');
+  });
+  dom.uploadZone.addEventListener('dragleave', () => {
+    dom.uploadZone.classList.remove('drag-over');
+  });
+  dom.uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dom.uploadZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+
+  // 全局拖拽（阻止浏览器默认打开图片）
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
+
+  // 清空图片
+  dom.clearBtn.addEventListener('click', clearImage);
+
+  // 网格尺寸输入
+  function onGridSizeChange() {
+    let cols = parseInt(dom.gridCols.value) || 32;
+    let rows = parseInt(dom.gridRows.value) || 32;
+
+    if (cols < 8) { cols = 8; dom.gridCols.value = 8; showToast('最小支持8列', 'warn'); }
+    if (cols > 100) { cols = 100; dom.gridCols.value = 100; showToast('最大支持100×100网格，请缩小尺寸', 'warn'); }
+    if (rows < 8) { rows = 8; dom.gridRows.value = 8; showToast('最小支持8行', 'warn'); }
+    if (rows > 100) { rows = 100; dom.gridRows.value = 100; showToast('最大支持100×100网格，请缩小尺寸', 'warn'); }
+
+    state.gridCols = cols;
+    state.gridRows = rows;
+    updatePresetActive();
+    saveCache();
+    dom.footerGridInfo.textContent = `${cols} × ${rows}`;
+    debouncedProcess();
+  }
+
+  dom.gridCols.addEventListener('input', onGridSizeChange);
+  dom.gridRows.addEventListener('input', onGridSizeChange);
+
+  // 快捷预设
+  $$('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cols = parseInt(btn.dataset.cols);
+      const rows = parseInt(btn.dataset.rows);
+      state.gridCols = cols;
+      state.gridRows = rows;
+      dom.gridCols.value = cols;
+      dom.gridRows.value = rows;
+      updatePresetActive();
+      saveCache();
+      dom.footerGridInfo.textContent = `${cols} × ${rows}`;
+      debouncedProcess();
+    });
+  });
+
+  // 最大颜色数
+  dom.maxColors.addEventListener('input', () => {
+    let val = parseInt(dom.maxColors.value) || 16;
+    if (val < 2) { val = 2; dom.maxColors.value = 2; }
+    if (val > 64) { val = 64; dom.maxColors.value = 64; }
+    state.maxColors = val;
+    saveCache();
+    debouncedProcess();
+  });
+
+  // 模式切换
+  dom.modeBlueprint.addEventListener('click', () => setModeUI('blueprint'));
+  dom.modeCoordinate.addEventListener('click', () => setModeUI('coordinate'));
+
+  // 图片编辑按钮（注入依赖） 
+  var ImageEdit = createImageEdit({
+    state: state,
+    finishUpload: finishUpload,
+    showLoader: showLoader,
+    hideLoader: hideLoader,
+    showToast: showToast
+  });
+  dom.btnRemoveBg.addEventListener('click', ImageEdit.removeBackground);
+  dom.btnRotateCW.addEventListener('click', ImageEdit.rotateCW);
+  dom.btnRotateCCW.addEventListener('click', ImageEdit.rotateCCW);
+  dom.btnFlipH.addEventListener('click', ImageEdit.flipHorizontal);
+  dom.btnFlipV.addEventListener('click', ImageEdit.flipVertical);
+  dom.btnEnhanceEdge.addEventListener('click', ImageEdit.enhanceEdge);
+
+  // 下载按钮
+  dom.downloadExcelBtn.addEventListener('click', generateExcel);
+  dom.downloadImageBtn.addEventListener('click', generateImage);
+
+  // 键盘快捷键 Ctrl+S 下载 Excel
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      generateExcel();
+    }
+  });
+
+  // 窗口缩放时重新渲染网格
+  window.addEventListener('resize', () => debouncedRerender());
+
+  // ==================== 初始化 ====================
+  function init() {
+    checkBrowser();
+    loadCache();
+    syncUIFromState();
+    dom.footerGridInfo.textContent = `${state.gridCols} × ${state.gridRows}`;
+  }
+
+  init();
+
+})();
+</script>
+
+</body>
+</html>
