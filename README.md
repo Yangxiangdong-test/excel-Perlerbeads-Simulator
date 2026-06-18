@@ -1,5 +1,11 @@
 # excel-Perlerbeads-Simulator
 使用豆包+Codebuddy+DeepSeek实现的一款excel拼豆模拟器，仅使用了HTML、CSS、JS技术。上传你喜欢的图案生成对应的excel表格拼豆图案，简单易上手，有无技术经验均可使用
+# 使用教程
+下载或拉取源代码后，在浏览器运行html文件即可
+
+#页面截图
+<img width="1920" height="909" alt="image" src="https://github.com/user-attachments/assets/ecab4b66-5032-453a-84c7-f7cfafcefebe" />
+
 
 # 规则
 ##技术栈
